@@ -57,6 +57,28 @@ services:
       retries: 5
       start_period: 10s
 
+  tests:
+    image: python:3.13.16-slim-trixie@sha256:bf44cdfcb76cd3b41e879bc058fc37ec5872002ccfde7fcb765e218cde0cd79c
+    profiles:
+      - test
+    working_dir: /src
+    volumes:
+      - .:/src:ro
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_NAME: ${POSTGRES_DB:?}
+      DB_USER: ${POSTGRES_USER:?}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?}
+      PYTHONDONTWRITEBYTECODE: "1"
+      PIP_ROOT_USER_ACTION: ignore
+    networks:
+      - backend
+      - frontend
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["sh", "-c", "pip install --no-cache-dir --quiet -r requirements-dev.txt && pytest -v -p no:cacheprovider"]
 
 networks:
   backend:
