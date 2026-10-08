@@ -1,0 +1,10 @@
+*.pdf
+audit/
+capture/
+.env
+.env.*
+__pycache__/
+*.py[cod]
+.pytest_cache/
+venv/
+.venv/
