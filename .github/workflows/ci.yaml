@@ -122,3 +122,43 @@ jobs:
           "${TRIVY_IMAGE}" fs --scanners vuln
           --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1
           /src
+
+  integration:
+    needs:
+      - build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: api-image
+          path: ${{ runner.temp }}
+      - run: docker load --input "${RUNNER_TEMP}/api-image.tar"
+      - name: generer le .env
+        run: |
+          cp .env.example .env
+          password="$(openssl rand -hex 24)"
+          echo "::add-mask::${password}"
+          sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=${password}/" .env
+      - name: demarrer la stack
+        run: docker compose up --detach --no-build --wait --wait-timeout 120
+      - run: docker compose ps
+      - name: tester /health
+        run: curl --fail --silent --show-error --max-time 5 http://localhost:5000/health
+      - name: tester /dbtest
+        run: curl --fail --silent --show-error --max-time 5 http://localhost:5000/dbtest
+      - name: pytest
+        run: docker compose --profile test run --rm tests
+      - name: journaux en cas d'echec
+        if: failure()
+        run: |
+          docker compose --profile test ps --all
+          docker compose --profile test logs
+      - name: teardown
+        if: always()
+        run: docker compose --profile test down --volumes --remove-orphans
