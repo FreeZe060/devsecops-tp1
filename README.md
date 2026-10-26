@@ -125,7 +125,7 @@ Déclenchement sur `push` et `pull_request` vers `main`, et sur les tags `v*.*.*
 | `build` | build BuildKit, puis Dive `--ci --lowestEfficiency=0.8` < 80 % |
 | `trivy` | `image` et `fs` : HIGH/CRITICAL corrigible (`--ignore-unfixed --exit-code 1`) |
 | `integration` | `compose up --wait --wait-timeout 120`, `/health`, `/dbtest`, pytest ; `down -v` en `if: always()` |
-| `release` | uniquement sur tag `v*.*.*` et après succès de `trivy` et `integration` |
+| `release` | uniquement sur tag `v*.*.*` et après succès de `trivy` et `integration` ; publie le tarball audité (`docker load` → `docker tag` → `docker push`), sans reconstruction |
 
 - **Permissions** : `permissions: {}` au niveau du workflow, `contents: read` par job, `packages: write`
   uniquement sur `release`. Connexion GHCR avec `GITHUB_TOKEN`, sans secret personnel.
