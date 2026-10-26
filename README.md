@@ -12,7 +12,7 @@ hôte :5000 ──► api-python (distroless, UID 65532, gunicorn) ──► db 
 | Livrable | Mise en œuvre |
 |---|---|
 | `Dockerfile` | Multi-stage : builder `python:3.13.16-slim-trixie` → runtime `distroless/python3-debian13:nonroot`, épinglés par digest, `USER 65532:65532`, `CMD` en forme JSON |
-| `docker-compose.yml` | PostgreSQL Chainguard par digest, réseau `backend` interne, `depends_on: service_healthy`, healthchecks exec, service `tests` (profil `test`) |
+| `docker-compose.yml` | PostgreSQL Chainguard par digest, réseau `backend` interne, `depends_on: service_healthy`, healthchecks exec, mot de passe en secret fichier (`/run/secrets/db_password`, absent des variables d'environnement), service `tests` (profil `test`) |
 | `requirements.txt` | Flask 3.1.3, Werkzeug 3.1.9, psycopg2-binary 2.9.13, gunicorn 26.2.0 — 0 CVE |
 | `.dockerignore` | Liste blanche : tout est exclu sauf `app.py` et `requirements.txt` |
 | `.hadolint.yaml` | Seuil `warning`, registres `docker.io`/`gcr.io`/`cgr.dev`/`ghcr.io`, DL3002/DL3006/DL3007/DL4006 en `error` |
@@ -31,7 +31,8 @@ docker run -d --name tp1 -p 5000:5000 ghcr.io/freeze060/devsecops-tp1:0.5.0
 curl http://localhost:5000/health
 ```
 
-Stack complète : `cp .env.example .env`, `docker compose up -d --build --wait`, puis
+Stack complète : `cp .env.example .env`, mot de passe dans `secrets/db_password.txt` (non versionné),
+`docker compose up -d --build --wait`, puis
 `docker compose --profile test run --rm tests` et `docker compose --profile test down -v`.
 
 ## 2. Tableau comparatif Avant / Après
@@ -124,7 +125,7 @@ Déclenchement sur `push` et `pull_request` vers `main`, et sur les tags `v*.*.*
 | `build` | build BuildKit, puis Dive `--ci --lowestEfficiency=0.8` < 80 % |
 | `trivy` | `image` et `fs` : HIGH/CRITICAL corrigible (`--ignore-unfixed --exit-code 1`) |
 | `integration` | `compose up --wait --wait-timeout 120`, `/health`, `/dbtest`, pytest ; `down -v` en `if: always()` |
-| `release` | uniquement sur tag `v*.*.*` et après succès de `trivy` et `integration` |
+| `release` | uniquement sur tag `v*.*.*` et après succès de `trivy` et `integration` ; publie le tarball audité (`docker load` → `docker tag` → `docker push`), sans reconstruction |
 
 - **Permissions** : `permissions: {}` au niveau du workflow, `contents: read` par job, `packages: write`
   uniquement sur `release`. Connexion GHCR avec `GITHUB_TOKEN`, sans secret personnel.

@@ -4,11 +4,20 @@ import os
 
 app = Flask(__name__)
 
+
+def read_secret(name, default):
+    path = os.getenv(f"{name}_FILE")
+    if path:
+        with open(path, encoding="utf-8") as secret_file:
+            return secret_file.read().strip()
+    return os.getenv(name, default)
+
+
 DB_HOST = os.getenv("DB_HOST", "db")
 DB_PORT = os.getenv("DB_PORT", "5432")
 DB_NAME = os.getenv("DB_NAME", "testdb")
 DB_USER = os.getenv("DB_USER", "testuser")
-DB_PASSWORD = os.getenv("DB_PASSWORD", "testpass")
+DB_PASSWORD = read_secret("DB_PASSWORD", "testpass")
 
 @app.route("/health")
 def health_check():

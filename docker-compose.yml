@@ -4,8 +4,10 @@ services:
     user: "70:70"
     environment:
       POSTGRES_USER: ${POSTGRES_USER:?}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
       POSTGRES_DB: ${POSTGRES_DB:?}
+    secrets:
+      - db_password
     volumes:
       - db-data:/var/lib/postgresql
     networks:
@@ -33,7 +35,9 @@ services:
       DB_PORT: "5432"
       DB_NAME: ${POSTGRES_DB:?}
       DB_USER: ${POSTGRES_USER:?}
-      DB_PASSWORD: ${POSTGRES_PASSWORD:?}
+      DB_PASSWORD_FILE: /run/secrets/db_password
+    secrets:
+      - db_password
     ports:
       - "${API_PORT:-5000}:5000"
     networks:
@@ -69,9 +73,11 @@ services:
       DB_PORT: "5432"
       DB_NAME: ${POSTGRES_DB:?}
       DB_USER: ${POSTGRES_USER:?}
-      DB_PASSWORD: ${POSTGRES_PASSWORD:?}
+      DB_PASSWORD_FILE: /run/secrets/db_password
       PYTHONDONTWRITEBYTECODE: "1"
       PIP_ROOT_USER_ACTION: ignore
+    secrets:
+      - db_password
     networks:
       - backend
       - frontend
@@ -84,6 +90,10 @@ networks:
   backend:
     internal: true
   frontend:
+
+secrets:
+  db_password:
+    file: ./secrets/db_password.txt
 
 volumes:
   db-data:
