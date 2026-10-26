@@ -139,12 +139,13 @@ jobs:
           name: api-image
           path: ${{ runner.temp }}
       - run: docker load --input "${RUNNER_TEMP}/api-image.tar"
-      - name: generer le .env
+      - name: generer le .env et le secret
         run: |
           cp .env.example .env
           password="$(openssl rand -hex 24)"
           echo "::add-mask::${password}"
-          sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=${password}/" .env
+          mkdir -p secrets
+          printf '%s' "${password}" > secrets/db_password.txt
       - name: demarrer la stack
         run: docker compose up --detach --no-build --wait --wait-timeout 120
       - run: docker compose ps
