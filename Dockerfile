@@ -8,7 +8,7 @@ RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
     test -s /run/secrets/pip_token \
     && pip install --no-compile --target /install -r requirements.txt
 
-FROM gcr.io/distroless/python3-debian13:nonroot@sha256:774595d652a294b54c9bd575b2d9fdd1a4b47547dc17b8bfa4c0e953c64855b3
+FROM gcr.io/distroless/python3-debian13:nonroot@sha256:64e54c4b1200da244d80181d98e86fc01d73c8101f107d5baf472152d8e119a2
 ENV PYTHONPATH=/app/deps \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
