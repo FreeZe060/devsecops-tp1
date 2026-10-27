@@ -16,7 +16,8 @@ hôte :5000 ──► api-python (distroless, UID 65532, gunicorn) ──► db 
 | `requirements.txt` | Flask 3.1.3, Werkzeug 3.1.9, psycopg2-binary 2.9.13, gunicorn 26.2.0 — 0 CVE |
 | `.dockerignore` | Liste blanche : tout est exclu sauf `app.py` et `requirements.txt` |
 | `.hadolint.yaml` | Seuil `warning`, registres `docker.io`/`gcr.io`/`cgr.dev`/`ghcr.io`, DL3002/DL3006/DL3007/DL4006 en `error` |
-| `.github/workflows/ci.yaml` | flake8 → hadolint → build + Dive → Trivy / intégration → release GHCR |
+| `docker-bake.hcl` | Build déclaratif : variables `REGISTRY`/`IMAGE`/`VERSION`, `linux/amd64` + `linux/arm64`, secret `pip_token`, cache `registry` `mode=max` |
+| `.github/workflows/ci.yaml` | flake8 → hadolint → build multi-arch (Bake + QEMU) + Dive → Trivy par plateforme / intégration → release GHCR |
 
 ## 1. Liens publics des packages GHCR
 
@@ -132,20 +133,33 @@ Déclenchement sur `push` et `pull_request` vers `main`, et sur les tags `v*.*.*
 |---|---|
 | `flake8` | violation non ignorée par `.flake8` |
 | `hadolint` | avertissement avec `.hadolint.yaml` |
-| `build` | build BuildKit, puis Dive `--ci --lowestEfficiency=0.8` < 80 % |
-| `trivy` | `image` et `fs` : HIGH/CRITICAL corrigible (`--ignore-unfixed --exit-code 1`) ; `image --scanners secret` : tout secret détecté |
-| `integration` | `compose up --wait --wait-timeout 120`, `/health`, `/dbtest`, pytest ; `down -v` en `if: always()` |
-| `release` | uniquement sur tag `v*.*.*` et après succès de `trivy` et `integration` ; publie le tarball audité (`docker load` → `docker tag` → `docker push`), sans reconstruction |
+| `build` | QEMU (`setup-qemu-action`, binfmt épinglé) → builder `docker-container` → `bake-action` : index multi-arch poussé **par digest** (sans tag) + cache `buildcache` ; Dive `--ci --lowestEfficiency=0.8` < 80 % |
+| `trivy` | matrice `linux/amd64` / `linux/arm64` sur le digest : HIGH/CRITICAL corrigible (`--ignore-unfixed --exit-code 1`), `--scanners secret` ; `fs` sur les sources |
+| `integration` | image tirée par digest ; `compose up --wait --wait-timeout 120`, `/health`, `/dbtest`, pytest ; `down -v` en `if: always()` |
+| `release` | uniquement sur tag `v*.*.*` et après succès de `trivy` et `integration` ; `docker buildx imagetools create` pose les tags SemVer sur le digest audité, sans reconstruction, puis `imagetools inspect` |
 
 - **Permissions** : `permissions: {}` au niveau du workflow, `contents: read` par job, `packages: write`
-  uniquement sur `release`. Connexion GHCR avec `GITHUB_TOKEN`, sans secret personnel.
+  sur `build` (push du digest et du cache) et `release`, `packages: read` sur `trivy` et `integration`. Connexion GHCR avec `GITHUB_TOKEN`, sans secret personnel.
 - **Pinning SHA** : toutes les actions par SHA de commit (ex. `actions/checkout@3d3c42e5…` = v7.0.1,
-  `docker/build-push-action@c3c9e263…` = v7.4.0). Un tag `@v7` est mobile, un SHA est immuable.
+  `docker/bake-action@59cb1203…` = v7.5.0). Un tag `@v7` est mobile, un SHA est immuable.
   Hadolint, Dive et Trivy tournent en image Docker version + digest.
 - **SemVer** : tag Git `vX.Y.Z` → tags d'image `X.Y.Z`, `X.Y` et `X` via `docker/metadata-action`
   (`X` non publié pour les versions `0.x`), `latest` désactivé.
 
-## 7. Preuves d'exécution
+## 7. Build multi-architecture
+
+```bash
+docker buildx create --name tp2 --driver docker-container --bootstrap --use
+VERSION=0.6.0 docker buildx bake --push
+docker buildx imagetools inspect ghcr.io/freeze060/devsecops-tp1:0.6.0
+```
+
+L'index OCI expose `linux/amd64` et `linux/arm64` (plus une attestation `unknown/unknown`) :
+`docker pull` choisit la variante du processeur. Le stage builder arm64 s'exécute sous QEMU ;
+`psycopg2-binary` fournit une roue `manylinux aarch64`, rien n'est compilé. Sur un builder vide,
+le cache `registry` `mode=max` restaure toutes les couches, y compris `pip install`.
+
+## 8. Preuves d'exécution
 
 ```
 $ python -m flake8 .                                    → exit code 0

@@ -18,6 +18,8 @@ concurrency:
 
 env:
   IMAGE_LOCAL: devsecops-tp1-api:local
+  IMAGE_REMOTE: ghcr.io/freeze060/devsecops-tp1
+  BINFMT_IMAGE: docker.io/tonistiigi/binfmt:qemu-v10.2.3@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
   HADOLINT_IMAGE: hadolint/hadolint:v2.15.1@sha256:32dac94127fd60b7b7e3fbfc65e1383b9b5e25c9bfd7b8536de7a539fe68a12d
   DIVE_IMAGE: wagoodman/dive:v0.13.1@sha256:f1886e6c32c094fc41a623c1989f5cb3e48aa766da5f0be233f911fc1d85ce10
   TRIVY_IMAGE: aquasec/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa
@@ -63,9 +65,12 @@ jobs:
       - flake8
       - hadolint
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     permissions:
       contents: read
+      packages: write
+    outputs:
+      digest: ${{ fromJSON(steps.bake.outputs.metadata).api['containerimage.digest'] }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -76,27 +81,33 @@ jobs:
           echo "::add-mask::${token}"
           mkdir -p secrets
           printf '%s' "${token}" > secrets/pip_token.txt
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1
+        with:
+          image: ${{ env.BINFMT_IMAGE }}
+          platforms: arm64
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
-      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
         with:
-          context: .
-          secret-files: |
-            pip_token=secrets/pip_token.txt
-          tags: ${{ env.IMAGE_LOCAL }}
-          outputs: type=docker,dest=${{ runner.temp }}/api-image.tar
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-      - run: docker load --input "${RUNNER_TEMP}/api-image.tar"
-      - run: >-
-          docker run --rm -e CI=true
-          -v /var/run/docker.sock:/var/run/docker.sock
-          "${DIVE_IMAGE}" --ci --lowestEfficiency=0.8 "${IMAGE_LOCAL}"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: bake
+        uses: docker/bake-action@59cb1203cd42bcefd40a1b6d73b589e48c86040e
         with:
-          name: api-image
-          path: ${{ runner.temp }}/api-image.tar
-          retention-days: 1
-          if-no-files-found: error
+          source: .
+          files: docker-bake.hcl
+          targets: api
+          set: |
+            api.tags=${{ env.IMAGE_REMOTE }}
+            api.output=type=image,push-by-digest=true,name-canonical=true,push=true
+      - name: dive
+        env:
+          DIGEST: ${{ fromJSON(steps.bake.outputs.metadata).api['containerimage.digest'] }}
+        run: |
+          docker pull "${IMAGE_REMOTE}@${DIGEST}"
+          docker run --rm -e CI=true \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            "${DIVE_IMAGE}" --ci --lowestEfficiency=0.8 "${IMAGE_REMOTE}@${DIGEST}"
 
   trivy:
     needs:
@@ -105,31 +116,41 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - linux/amd64
+          - linux/arm64
+    env:
+      DIGEST: ${{ needs.build.outputs.digest }}
+      PLATFORM: ${{ matrix.platform }}
+      TRIVY_USERNAME: ${{ github.actor }}
+      TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
-        with:
-          name: api-image
-          path: ${{ runner.temp }}
-      - run: docker load --input "${RUNNER_TEMP}/api-image.tar"
       - name: trivy image
         run: >-
           docker run --rm
-          -v /var/run/docker.sock:/var/run/docker.sock
+          -e TRIVY_USERNAME -e TRIVY_PASSWORD
           -v trivy-cache:/root/.cache/trivy
-          "${TRIVY_IMAGE}" image --scanners vuln
+          "${TRIVY_IMAGE}" image --image-src remote --platform "${PLATFORM}"
+          --scanners vuln
           --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1
-          "${IMAGE_LOCAL}"
+          "${IMAGE_REMOTE}@${DIGEST}"
       - name: trivy secret
         run: >-
           docker run --rm
-          -v /var/run/docker.sock:/var/run/docker.sock
+          -e TRIVY_USERNAME -e TRIVY_PASSWORD
           -v trivy-cache:/root/.cache/trivy
-          "${TRIVY_IMAGE}" image --scanners secret --exit-code 1
-          "${IMAGE_LOCAL}"
+          "${TRIVY_IMAGE}" image --image-src remote --platform "${PLATFORM}"
+          --scanners secret --exit-code 1
+          "${IMAGE_REMOTE}@${DIGEST}"
       - name: trivy fs
+        if: matrix.platform == 'linux/amd64'
         run: >-
           docker run --rm
           -v "${GITHUB_WORKSPACE}:/src:ro"
@@ -145,15 +166,22 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
+      packages: read
+    env:
+      DIGEST: ${{ needs.build.outputs.digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
         with:
-          name: api-image
-          path: ${{ runner.temp }}
-      - run: docker load --input "${RUNNER_TEMP}/api-image.tar"
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: recuperer l'image testee
+        run: |
+          docker pull "${IMAGE_REMOTE}@${DIGEST}"
+          docker tag "${IMAGE_REMOTE}@${DIGEST}" "${IMAGE_LOCAL}"
       - name: generer le .env et le secret
         run: |
           cp .env.example .env
@@ -182,6 +210,7 @@ jobs:
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs:
+      - build
       - trivy
       - integration
     runs-on: ubuntu-24.04
@@ -190,11 +219,6 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
-        with:
-          name: api-image
-          path: ${{ runner.temp }}
-      - run: docker load --input "${RUNNER_TEMP}/api-image.tar"
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
         with:
           registry: ghcr.io
@@ -203,19 +227,25 @@ jobs:
       - id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ${{ env.IMAGE_REMOTE }}
           flavor: |
             latest=false
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}},enable=${{ !startsWith(github.ref, 'refs/tags/v0.') }}
-      - name: publier l'image auditee
+      - name: publier l'index audite
         env:
+          DIGEST: ${{ needs.build.outputs.digest }}
           TAGS: ${{ steps.meta.outputs.tags }}
         run: |
+          args=()
           while IFS= read -r tag; do
             [ -n "${tag}" ] || continue
-            docker tag "${IMAGE_LOCAL}" "${tag}"
-            docker push "${tag}"
+            args+=(--tag "${tag}")
           done <<< "${TAGS}"
+          docker buildx imagetools create "${args[@]}" "${IMAGE_REMOTE}@${DIGEST}"
+      - name: verifier le manifeste multi-arch
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: docker buildx imagetools inspect "${IMAGE_REMOTE}:${VERSION}"
