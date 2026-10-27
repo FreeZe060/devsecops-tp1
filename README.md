@@ -31,7 +31,8 @@ docker run -d --name tp1 -p 5000:5000 ghcr.io/freeze060/devsecops-tp1:0.5.0
 curl http://localhost:5000/health
 ```
 
-Stack complète : `cp .env.example .env`, mot de passe dans `secrets/db_password.txt` (non versionné),
+Stack complète : `cp .env.example .env`, mot de passe dans `secrets/db_password.txt` et jeton de build dans
+`secrets/pip_token.txt` (non versionnés),
 `docker compose up -d --build --wait`, puis
 `docker compose --profile test run --rm tests` et `docker compose --profile test down -v`.
 
@@ -72,6 +73,12 @@ change), `pip install --no-compile --target /install` avec un cache BuildKit
 par digest) : une dépendance modifiée ne retélécharge qu'elle-même et le cache n'entre jamais dans une
 couche. Seuls `/install` et `app.py` sont copiés via `COPY --from=builder`. Aucun `ADD`, aucun `cd`,
 `SHELL` avec `-o pipefail`.
+
+**Secret de build** : `--mount=type=secret,id=pip_token,required=true` projette le jeton en tmpfs le
+temps du seul `RUN` d'installation, `test -s` le vérifie ; jamais d'`ARG`, d'`ENV` ni de copie sur disque.
+Le fichier source est exclu de Git (`.gitignore`) et du contexte (`.dockerignore` en liste blanche).
+Build sans secret ou avec un secret vide → échec. `docker history --no-trunc`, `docker save` et
+`trivy image --scanners secret` : 0 trace du jeton, y compris dans les couches du stage `builder`.
 
 ## 4. Résolution des contraintes sans shell
 
@@ -126,7 +133,7 @@ Déclenchement sur `push` et `pull_request` vers `main`, et sur les tags `v*.*.*
 | `flake8` | violation non ignorée par `.flake8` |
 | `hadolint` | avertissement avec `.hadolint.yaml` |
 | `build` | build BuildKit, puis Dive `--ci --lowestEfficiency=0.8` < 80 % |
-| `trivy` | `image` et `fs` : HIGH/CRITICAL corrigible (`--ignore-unfixed --exit-code 1`) |
+| `trivy` | `image` et `fs` : HIGH/CRITICAL corrigible (`--ignore-unfixed --exit-code 1`) ; `image --scanners secret` : tout secret détecté |
 | `integration` | `compose up --wait --wait-timeout 120`, `/health`, `/dbtest`, pytest ; `down -v` en `if: always()` |
 | `release` | uniquement sur tag `v*.*.*` et après succès de `trivy` et `integration` ; publie le tarball audité (`docker load` → `docker tag` → `docker push`), sans reconstruction |
 

@@ -4,7 +4,9 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 WORKDIR /build
 COPY requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
-    pip install --no-compile --target /install -r requirements.txt
+    --mount=type=secret,id=pip_token,required=true \
+    test -s /run/secrets/pip_token \
+    && pip install --no-compile --target /install -r requirements.txt
 
 FROM gcr.io/distroless/python3-debian13:nonroot@sha256:774595d652a294b54c9bd575b2d9fdd1a4b47547dc17b8bfa4c0e953c64855b3
 ENV PYTHONPATH=/app/deps \
