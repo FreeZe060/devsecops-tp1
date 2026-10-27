@@ -67,8 +67,11 @@ Les 159 CVE restantes concernent les bibliothèques Debian 13 nécessaires à Py
 les dépendances Python par `==`, les actions GitHub par SHA de commit. Aucun tag `latest`.
 
 **Dockerfile** : `requirements.txt` est copié et installé avant `app.py` (cache préservé quand le code
-change), `pip install --no-cache-dir --no-compile --target /install`, seuls `/install` et `app.py`
-sont copiés via `COPY --from=builder`. Aucun `ADD`, aucun `cd`, `SHELL` avec `-o pipefail`.
+change), `pip install --no-compile --target /install` avec un cache BuildKit
+`--mount=type=cache,target=/root/.cache/pip,sharing=locked` (frontend `docker/dockerfile:1.27.1` épinglé
+par digest) : une dépendance modifiée ne retélécharge qu'elle-même et le cache n'entre jamais dans une
+couche. Seuls `/install` et `app.py` sont copiés via `COPY --from=builder`. Aucun `ADD`, aucun `cd`,
+`SHELL` avec `-o pipefail`.
 
 ## 4. Résolution des contraintes sans shell
 
