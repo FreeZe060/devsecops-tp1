@@ -312,6 +312,10 @@ $ cosign verify --certificate-identity "…/ci.yaml@refs/heads/main" …   → e
 $ cosign verify … ghcr.io/freeze060/devsecops-tp1@sha256:9ef18c04… (0.6.0, non signée) → no signatures found, exit 10
 ```
 
+Gate `verify` du pipeline `v0.7.0` (signature, attestation et extraction du SBOM certifié en succès) :
+
+![Job verify v0.7.0](docs/captures/ci-verify-v0.7.0.png)
+
 ## 11. Preuves d'exécution
 
 ```
@@ -340,6 +344,7 @@ $ docker pull ghcr.io/freeze060/devsecops-tp1:0.5.0   (sans authentification)
   tags publiés : 0.5.0, 0.5
 ```
 
-Pipeline du tag `v0.5.0`, 6 jobs en succès dont `release` (https://github.com/FreeZe060/devsecops-tp1/actions/runs/37777527100) :
+Pipeline du tag `v0.7.0`, 11 jobs en succès dont `release` (publication, signature, attestation) et `verify`
+(https://github.com/FreeZe060/devsecops-tp1/actions/runs/40891011003) :
 
-![CI tag v0.5.0](docs/captures/ci-release-v0.5.0.png)
+![CI tag v0.7.0](docs/captures/ci-release-v0.7.0.png)
