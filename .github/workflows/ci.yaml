@@ -22,6 +22,7 @@ env:
   BINFMT_IMAGE: docker.io/tonistiigi/binfmt:qemu-v10.2.3@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
   HADOLINT_IMAGE: hadolint/hadolint:v2.15.1@sha256:32dac94127fd60b7b7e3fbfc65e1383b9b5e25c9bfd7b8536de7a539fe68a12d
   DIVE_IMAGE: wagoodman/dive:v0.13.1@sha256:f1886e6c32c094fc41a623c1989f5cb3e48aa766da5f0be233f911fc1d85ce10
+  SYFT_IMAGE: anchore/syft:v1.55.0@sha256:4cc92b64ca74ffca4c94d4c8fcc01f217731375300be14d0b6eeb2e82eaa110a
   TRIVY_IMAGE: aquasec/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa
 
 defaults:
@@ -108,6 +109,50 @@ jobs:
           docker run --rm -e CI=true \
             -v /var/run/docker.sock:/var/run/docker.sock \
             "${DIVE_IMAGE}" --ci --lowestEfficiency=0.8 "${IMAGE_REMOTE}@${DIGEST}"
+
+  sbom:
+    needs:
+      - build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+    env:
+      DIGEST: ${{ needs.build.outputs.digest }}
+      SYFT_REGISTRY_AUTH_AUTHORITY: ghcr.io
+      SYFT_REGISTRY_AUTH_USERNAME: ${{ github.actor }}
+      SYFT_REGISTRY_AUTH_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: syft
+        run: >-
+          docker run --rm
+          --user "$(id -u):$(id -g)"
+          --tmpfs /tmp:rw,mode=1777
+          -e HOME=/tmp
+          -e SYFT_REGISTRY_AUTH_AUTHORITY
+          -e SYFT_REGISTRY_AUTH_USERNAME
+          -e SYFT_REGISTRY_AUTH_PASSWORD
+          -v "${GITHUB_WORKSPACE}:/out"
+          "${SYFT_IMAGE}" "registry:${IMAGE_REMOTE}@${DIGEST}"
+          --platform linux/amd64
+          -o cyclonedx-json=/out/sbom.cdx.json
+          -o spdx-json=/out/sbom.spdx.json
+      - name: interroger le sbom
+        run: |
+          echo "composants CycloneDX : $(jq '.components | length' sbom.cdx.json)"
+          echo "paquets avec PURL    : $(jq '[.components[] | select(.purl)] | length' sbom.cdx.json)"
+          echo "paquets SPDX         : $(jq '.packages | length' sbom.spdx.json)"
+          jq -r '.components[] | select(.purl) | .purl' sbom.cdx.json
+          jq -r '[.components[] | select(.purl) | .licenses[]? | .license.id // .license.name // .expression] | unique | .[]' sbom.cdx.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: sbom
+          path: |
+            sbom.cdx.json
+            sbom.spdx.json
+          retention-days: 90
+          if-no-files-found: error
 
   trivy:
     needs:
@@ -211,6 +256,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     needs:
       - build
+      - sbom
       - trivy
       - integration
     runs-on: ubuntu-24.04

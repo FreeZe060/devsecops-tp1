@@ -16,8 +16,9 @@ hôte :5000 ──► api-python (distroless, UID 65532, gunicorn) ──► db 
 | `requirements.txt` | Flask 3.1.3, Werkzeug 3.1.9, psycopg2-binary 2.9.13, gunicorn 26.2.0 — 0 CVE |
 | `.dockerignore` | Liste blanche : tout est exclu sauf `app.py` et `requirements.txt` |
 | `.hadolint.yaml` | Seuil `warning`, registres `docker.io`/`gcr.io`/`cgr.dev`/`ghcr.io`, DL3002/DL3006/DL3007/DL4006 en `error` |
+| `sbom.cdx.json` / `sbom.spdx.json` | SBOM CycloneDX et SPDX de `0.6.0` générés par Syft (aussi en artefact CI) |
 | `docker-bake.hcl` | Build déclaratif : variables `REGISTRY`/`IMAGE`/`VERSION`, `linux/amd64` + `linux/arm64`, secret `pip_token`, cache `registry` `mode=max` |
-| `.github/workflows/ci.yaml` | flake8 → hadolint → build multi-arch (Bake + QEMU) + Dive → Trivy par plateforme / intégration → release GHCR |
+| `.github/workflows/ci.yaml` | flake8 → hadolint → build multi-arch (Bake + QEMU) + Dive → SBOM Syft / Trivy par plateforme / intégration → release GHCR |
 
 ## 1. Liens publics des packages GHCR
 
@@ -159,7 +160,34 @@ L'index OCI expose `linux/amd64` et `linux/arm64` (plus une attestation `unknown
 `psycopg2-binary` fournit une roue `manylinux aarch64`, rien n'est compilé. Sur un builder vide,
 le cache `registry` `mode=max` restaure toutes les couches, y compris `pip install`.
 
-## 8. Preuves d'exécution
+## 8. SBOM et analyse de traçabilité
+
+Syft lit les couches de l'image publiée **par digest**, sans `docker run`, et produit les deux standards
+en une passe : CycloneDX (OWASP) et SPDX 2.3 (ISO/IEC 5962). Les fichiers [`sbom.cdx.json`](sbom.cdx.json)
+et [`sbom.spdx.json`](sbom.spdx.json) à la racine correspondent à `0.6.0` (`linux/amd64`, variante testée
+en intégration) ; le job `sbom` les régénère à chaque pipeline et les archive en artefact (90 jours).
+
+```bash
+docker run --rm -v "$PWD:/out" anchore/syft:v1.55.0@sha256:4cc92b64… \n  registry:ghcr.io/freeze060/devsecops-tp1@sha256:9ef18c04… --platform linux/amd64 \n  -o cyclonedx-json=/out/sbom.cdx.json -o spdx-json=/out/sbom.spdx.json
+```
+
+| Requête `jq` | Résultat |
+|---|---|
+| `jq '.components \| length' sbom.cdx.json` | **2190** entrées : 47 paquets (`library`), 1 OS, 2142 fichiers catalogués |
+| `jq '[.components[] \| select(.purl)] \| length' sbom.cdx.json` | **47** paquets avec PURL : 38 `deb`, 9 `pypi` |
+| `jq '.packages \| length' sbom.spdx.json` | **48** paquets (47 + l'OS Debian 13.7) |
+| `jq -r '.components[] \| select(.purl) \| .purl' sbom.cdx.json` | ex. `pkg:pypi/flask@3.1.3`, `pkg:deb/debian/libssl3t64@3.5.7-1~deb13u3?arch=amd64&distro=debian-13.7` |
+| `jq '.components[] \| select(.purl) \| select(.name \| contains("ssl")) \| {nom: .name, version: .version}' sbom.cdx.json` | `libssl3t64` **3.5.7-1~deb13u3** |
+| `jq -r '[.components[] \| select(.purl) \| .licenses[]? \| .license.id // .license.name // .expression] \| unique \| .[]' sbom.cdx.json` | **84** licences distinctes |
+| `jq -r '.packages[].licenseConcluded' sbom.spdx.json \| sort \| uniq -c` | 34 `NOASSERTION`, 1 `MIT`, 1 `BSD-3-Clause`, 12 `LicenseRef-…` |
+
+Licences des dépendances Python : MIT (blinker, gunicorn), BSD-3-Clause (click, flask, itsdangerous,
+markupsafe, werkzeug), LGPL avec exceptions (psycopg2-binary) ; jinja2 n'en déclare pas dans ses
+métadonnées. Les licences GPL/LGPL proviennent des paquets Debian du runtime (glibc, libffi, liblzma…),
+liés dynamiquement. Métadonnées CISA présentes : outil `syft 1.55.0`, horodatage, PURL et CPE sur les 47 paquets,
+empreintes SHA-256 des 2142 fichiers, graphe `dependencies`.
+
+## 9. Preuves d'exécution
 
 ```
 $ python -m flake8 .                                    → exit code 0
