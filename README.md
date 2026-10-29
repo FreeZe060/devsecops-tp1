@@ -16,8 +16,9 @@ hôte :5000 ──► api-python (distroless, UID 65532, gunicorn) ──► db 
 | `requirements.txt` | Flask 3.1.3, Werkzeug 3.1.9, psycopg2-binary 2.9.13, gunicorn 26.2.0 — 0 CVE |
 | `.dockerignore` | Liste blanche : tout est exclu sauf `app.py` et `requirements.txt` |
 | `.hadolint.yaml` | Seuil `warning`, registres `docker.io`/`gcr.io`/`cgr.dev`/`ghcr.io`, DL3002/DL3006/DL3007/DL4006 en `error` |
+| `sbom.cdx.json` / `sbom.spdx.json` | SBOM CycloneDX et SPDX de `0.6.0` générés par Syft (aussi en artefact CI) |
 | `docker-bake.hcl` | Build déclaratif : variables `REGISTRY`/`IMAGE`/`VERSION`, `linux/amd64` + `linux/arm64`, secret `pip_token`, cache `registry` `mode=max` |
-| `.github/workflows/ci.yaml` | flake8 → hadolint → build multi-arch (Bake + QEMU) + Dive → Trivy par plateforme / intégration → release GHCR |
+| `.github/workflows/ci.yaml` | flake8 → hadolint → build multi-arch (Bake + QEMU) + Dive → SBOM Syft / Trivy par plateforme / intégration → release GHCR |
 
 ## 1. Liens publics des packages GHCR
 
@@ -26,9 +27,9 @@ Package : **https://github.com/FreeZe060/devsecops-tp1/pkgs/container/devsecops-
 ![Package GHCR public](docs/captures/ghcr-package.png)
 
 ```bash
-docker pull ghcr.io/freeze060/devsecops-tp1:0.5.0
-docker pull ghcr.io/freeze060/devsecops-tp1:0.5
-docker run -d --name tp1 -p 5000:5000 ghcr.io/freeze060/devsecops-tp1:0.5.0
+docker pull ghcr.io/freeze060/devsecops-tp1:0.6.0
+docker pull ghcr.io/freeze060/devsecops-tp1:0.6
+docker run -d --name tp1 -p 5000:5000 ghcr.io/freeze060/devsecops-tp1:0.6.0
 curl http://localhost:5000/health
 ```
 
@@ -159,7 +160,56 @@ L'index OCI expose `linux/amd64` et `linux/arm64` (plus une attestation `unknown
 `psycopg2-binary` fournit une roue `manylinux aarch64`, rien n'est compilé. Sur un builder vide,
 le cache `registry` `mode=max` restaure toutes les couches, y compris `pip install`.
 
-## 8. Preuves d'exécution
+Manifeste distant publié par le tag `v0.6.0` (pipeline https://github.com/FreeZe060/devsecops-tp1/actions/runs/40877182870) :
+
+```
+$ docker buildx imagetools inspect ghcr.io/freeze060/devsecops-tp1:0.6.0
+Name:      ghcr.io/freeze060/devsecops-tp1:0.6.0
+MediaType: application/vnd.oci.image.index.v1+json
+Digest:    sha256:9ef18c0460019d4ab862bf5a34142671d22e41b007fcd3a4054916fb870ee2fc
+Manifests:
+  Platform:    linux/amd64     sha256:abde8df9cc9b6c4d8835d6019cb1b8e4b7ad65ad5cc9728ffbf4625d3e426708
+  Platform:    linux/arm64     sha256:bb37979d2010b54d656ecf95add01d9913bf433c2cf17c4e64ff2e68a4614cf5
+  Platform:    unknown/unknown (attestation-manifest)
+
+$ docker run --rm --platform linux/amd64 --entrypoint python3 ghcr.io/freeze060/devsecops-tp1:0.6.0 -c 'import platform;print(platform.machine())'
+x86_64
+$ docker run --rm --platform linux/arm64 --entrypoint python3 ghcr.io/freeze060/devsecops-tp1:0.6.0 -c 'import platform;print(platform.machine())'
+aarch64
+```
+
+Les tags `0.6.0` et `0.6` pointent sur le même index `sha256:9ef18c04…`, celui construit et audité par le pipeline.
+
+## 8. SBOM et analyse de traçabilité
+
+Syft lit les couches de l'image publiée **par digest**, sans `docker run`, et produit les deux standards
+en une passe : CycloneDX (OWASP) et SPDX 2.3 (ISO/IEC 5962). Les fichiers [`sbom.cdx.json`](sbom.cdx.json)
+et [`sbom.spdx.json`](sbom.spdx.json) à la racine correspondent à `0.6.0` (`linux/amd64`, variante testée
+en intégration) ; le job `sbom` les régénère à chaque pipeline et les archive en artefact (90 jours).
+
+```bash
+docker run --rm -v "$PWD:/out" anchore/syft:v1.55.0@sha256:4cc92b64… \
+  registry:ghcr.io/freeze060/devsecops-tp1@sha256:9ef18c04… --platform linux/amd64 \
+  -o cyclonedx-json=/out/sbom.cdx.json -o spdx-json=/out/sbom.spdx.json
+```
+
+| Requête `jq` | Résultat |
+|---|---|
+| `jq '.components \| length' sbom.cdx.json` | **2190** entrées : 47 paquets (`library`), 1 OS, 2142 fichiers catalogués |
+| `jq '[.components[] \| select(.purl)] \| length' sbom.cdx.json` | **47** paquets avec PURL : 38 `deb`, 9 `pypi` |
+| `jq '.packages \| length' sbom.spdx.json` | **48** paquets (47 + l'OS Debian 13.7) |
+| `jq -r '.components[] \| select(.purl) \| .purl' sbom.cdx.json` | ex. `pkg:pypi/flask@3.1.3`, `pkg:deb/debian/libssl3t64@3.5.7-1~deb13u3?arch=amd64&distro=debian-13.7` |
+| `jq '.components[] \| select(.purl) \| select(.name \| contains("ssl")) \| {nom: .name, version: .version}' sbom.cdx.json` | `libssl3t64` **3.5.7-1~deb13u3** |
+| `jq -r '[.components[] \| select(.purl) \| .licenses[]? \| .license.id // .license.name // .expression] \| unique \| .[]' sbom.cdx.json` | **84** licences distinctes |
+| `jq -r '.packages[].licenseConcluded' sbom.spdx.json \| sort \| uniq -c` | 34 `NOASSERTION`, 1 `MIT`, 1 `BSD-3-Clause`, 12 `LicenseRef-…` |
+
+Licences des dépendances Python : MIT (blinker, gunicorn), BSD-3-Clause (click, flask, itsdangerous,
+markupsafe, werkzeug), LGPL avec exceptions (psycopg2-binary) ; jinja2 n'en déclare pas dans ses
+métadonnées. Les licences GPL/LGPL proviennent des paquets Debian du runtime (glibc, libffi, liblzma…),
+liés dynamiquement. Métadonnées CISA présentes : outil `syft 1.55.0`, horodatage, PURL et CPE sur les 47 paquets,
+empreintes SHA-256 des 2142 fichiers, graphe `dependencies`.
+
+## 9. Preuves d'exécution
 
 ```
 $ python -m flake8 .                                    → exit code 0
