@@ -17,6 +17,7 @@ hôte :5000 ──► api-python (distroless, UID 65532, gunicorn) ──► db 
 | `.dockerignore` | Liste blanche : tout est exclu sauf `app.py` et `requirements.txt` |
 | `.hadolint.yaml` | Seuil `warning`, registres `docker.io`/`gcr.io`/`cgr.dev`/`ghcr.io`, DL3002/DL3006/DL3007/DL4006 en `error` |
 | `sbom.cdx.json` / `sbom.spdx.json` | SBOM CycloneDX et SPDX de `0.6.0` générés par Syft (aussi en artefact CI) |
+| Vérification OIDC (pas de `cosign.pub`) | Signature keyless : identité du workflow et émetteur documentés en §10 |
 | `.grype.yaml` / `security.vex.json` | Règle Grype (HIGH corrigible bloquant) et déclarations OpenVEX d'inexploitabilité |
 | `docker-bake.hcl` | Build déclaratif : variables `REGISTRY`/`IMAGE`/`VERSION`, `linux/amd64` + `linux/arm64`, secret `pip_token`, cache `registry` `mode=max` |
 | `.github/workflows/ci.yaml` | flake8 → hadolint → build multi-arch (Bake + QEMU) + Dive → SBOM Syft + Grype/VEX / Trivy par plateforme / intégration → release GHCR |
@@ -76,6 +77,13 @@ change), `pip install --no-compile --target /install` avec un cache BuildKit
 par digest) : une dépendance modifiée ne retélécharge qu'elle-même et le cache n'entre jamais dans une
 couche. Seuls `/install` et `app.py` sont copiés via `COPY --from=builder`. Aucun `ADD`, aucun `cd`,
 `SHELL` avec `-o pipefail`.
+
+| Build (`docker buildx build --progress=plain`) | Durée totale | `pip install` | Téléchargements |
+|---|---|---|---|
+| À froid (cache BuildKit purgé) | 9 s | 3,4 s | 9 paquets `Downloading` |
+| Après `gunicorn` 26.2.0 → 26.1.0 | **4 s** | **1,8 s** | gunicorn seul ; 8 paquets `Using cached` |
+
+Image finale inchangée (111 Mo amd64), aucun `.cache/pip` dans `docker export`, Dive 99,78 %.
 
 **Secret de build** : `--mount=type=secret,id=pip_token,required=true` projette le jeton en tmpfs le
 temps du seul `RUN` d'installation, `test -s` le vérifie ; jamais d'`ARG`, d'`ENV` ni de copie sur disque.
@@ -140,10 +148,12 @@ Déclenchement sur `push` et `pull_request` vers `main`, et sur les tags `v*.*.*
 | `grype` | Grype sur l'artefact `sbom` avec `.grype.yaml` et `--vex security.vex.json` : HIGH/CRITICAL corrigible non qualifiée |
 | `trivy` | matrice `linux/amd64` / `linux/arm64` sur le digest : HIGH/CRITICAL corrigible (`--ignore-unfixed --exit-code 1`), `--scanners secret` ; `fs` sur les sources |
 | `integration` | image tirée par digest ; `compose up --wait --wait-timeout 120`, `/health`, `/dbtest`, pytest ; `down -v` en `if: always()` |
-| `release` | uniquement sur tag `v*.*.*` et après succès de `trivy` et `integration` ; `docker buildx imagetools create` pose les tags SemVer sur le digest audité, sans reconstruction, puis `imagetools inspect` |
+| `release` | uniquement sur tag `v*.*.*`, après `sbom`, `grype`, `trivy` et `integration` ; `imagetools create` pose les tags SemVer sur le digest audité (sans reconstruction), puis Cosign keyless signe ce **digest** et y attache le SBOM CycloneDX en attestation signée |
+| `verify` | gate d'admission indépendant : `cosign verify` et `cosign verify-attestation` depuis GHCR (identité exacte du workflow), extraction du SBOM certifié ; tout échec fait échouer le pipeline |
 
 - **Permissions** : `permissions: {}` au niveau du workflow, `contents: read` par job, `packages: write`
-  sur `build` (push du digest et du cache) et `release`, `packages: read` sur `trivy` et `integration`. Connexion GHCR avec `GITHUB_TOKEN`, sans secret personnel.
+  sur `build` (push du digest et du cache) et `release`, `packages: read` sur `sbom`, `trivy`,
+  `integration` et `verify`. `id-token: write` uniquement sur `release` (jeton OIDC pour Cosign keyless). Connexion GHCR avec `GITHUB_TOKEN`, sans secret personnel.
 - **Pinning SHA** : toutes les actions par SHA de commit (ex. `actions/checkout@3d3c42e5…` = v7.0.1,
   `docker/bake-action@59cb1203…` = v7.5.0). Un tag `@v7` est mobile, un SHA est immuable.
   Hadolint, Dive et Trivy tournent en image Docker version + digest.
@@ -246,7 +256,39 @@ Vérifications faites sur l'image `0.6.0` extraite : aucun binaire `mount`, `nse
 restent visibles : leur inexploitabilité n'a pas pu être démontrée. Les PURL portent la version Debian :
 toute mise à jour de l'image impose de revoir le document.
 
-## 10. Preuves d'exécution
+## 10. Signature et vérification publique (Cosign keyless)
+
+Signature **sans clé** (Sigstore) : le job `release` obtient un jeton OIDC GitHub (`id-token: write`),
+Fulcio délivre un certificat éphémère lié à l'identité du workflow et Rekor journalise la preuve.
+Aucune clé privée n'existe, donc pas de `cosign.pub` : la confiance repose sur l'identité ci-dessous.
+
+| Élément | Valeur |
+|---|---|
+| Image | `ghcr.io/freeze060/devsecops-tp1:0.7.0` |
+| Identité du certificat | `https://github.com/FreeZe060/devsecops-tp1/.github/workflows/ci.yaml@refs/tags/v0.7.0` |
+| Émetteur OIDC | `https://token.actions.githubusercontent.com` |
+| Signé / attesté | le digest de l'index multi-arch, jamais le tag |
+
+Commandes pour l'évaluateur (Docker suffit, aucune authentification) :
+
+```bash
+IMAGE=ghcr.io/freeze060/devsecops-tp1
+DIGEST=$(docker buildx imagetools inspect "$IMAGE:0.7.0" --format '{{json .Manifest.Digest}}' | tr -d '"')
+COSIGN="docker run --rm gcr.io/projectsigstore/cosign:v3.1.4@sha256:0f06154836d2de34f887a5c273506d52ca43edaa1d9e53e6510fa78a48f69c2d"
+ID=https://github.com/FreeZe060/devsecops-tp1/.github/workflows/ci.yaml@refs/tags/v0.7.0
+OIDC=https://token.actions.githubusercontent.com
+
+$COSIGN verify --certificate-identity "$ID" --certificate-oidc-issuer "$OIDC" "$IMAGE@$DIGEST"
+$COSIGN verify-attestation --type cyclonedx --certificate-identity "$ID" --certificate-oidc-issuer "$OIDC" \
+  "$IMAGE@$DIGEST" > attestation.json
+jq -r '.payload' attestation.json | base64 -d | jq .predicate > verified-sbom.json
+jq '.components | length' verified-sbom.json
+```
+
+Une image modifiée d'un octet, signée par un autre dépôt ou depuis un autre workflow renvoie
+`no matching signatures` et un code de sortie non nul.
+
+## 11. Preuves d'exécution
 
 ```
 $ python -m flake8 .                                    → exit code 0
