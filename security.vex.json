@@ -1,0 +1,191 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://github.com/FreeZe060/devsecops-tp1/blob/main/security.vex.json",
+  "author": "Tim Vannson et Alexandre Perez (binome DevSecOps)",
+  "timestamp": "2026-10-29T14:00:00Z",
+  "version": 1,
+  "statements": [
+    {
+      "vulnerability": {
+        "name": "CVE-2025-69720"
+      },
+      "products": [
+        {
+          "@id": "pkg:deb/debian/libncursesw6@6.5%2B20250216-2?arch=amd64&distro=debian-13.7&upstream=ncurses"
+        },
+        {
+          "@id": "pkg:deb/debian/libtinfo6@6.5%2B20250216-2?arch=amd64&distro=debian-13.7&upstream=ncurses"
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "La faille est dans l'outil en ligne de commande infocmp (progs/infocmp.c). L'image distroless ne contient que les bibliotheques libncursesw.so.6 et libtinfo.so.6 : aucun binaire infocmp, tic, toe ni shell."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-76642"
+      },
+      "products": [
+        {
+          "@id": "pkg:deb/debian/libuuid1@2.41.5-0%2Bdeb13u1?arch=amd64&distro=debian-13.7&upstream=util-linux"
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "La faille concerne mount(8) d'util-linux. Seule la bibliotheque libuuid.so.1 est presente : aucun binaire mount ni umount dans l'image."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-78408"
+      },
+      "products": [
+        {
+          "@id": "pkg:deb/debian/libuuid1@2.41.5-0%2Bdeb13u1?arch=amd64&distro=debian-13.7&upstream=util-linux"
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "La faille concerne nsenter d'util-linux. Seule la bibliotheque libuuid.so.1 est presente : aucun binaire nsenter dans l'image."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-78409"
+      },
+      "products": [
+        {
+          "@id": "pkg:deb/debian/libuuid1@2.41.5-0%2Bdeb13u1?arch=amd64&distro=debian-13.7&upstream=util-linux"
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "La faille concerne l'option X-mount.subdir de mount(8). Seule la bibliotheque libuuid.so.1 est presente : aucun binaire mount dans l'image."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-78410"
+      },
+      "products": [
+        {
+          "@id": "pkg:deb/debian/libuuid1@2.41.5-0%2Bdeb13u1?arch=amd64&distro=debian-13.7&upstream=util-linux"
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "La faille concerne les bind mounts restreints de mount(8). Seule la bibliotheque libuuid.so.1 est presente : aucun binaire mount dans l'image."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-19445"
+      },
+      "products": [
+        {
+          "@id": "pkg:deb/debian/libpython3.13-minimal@3.13.5-2%2Bdeb13u5?arch=amd64&distro=debian-13.7&upstream=python3.13"
+        },
+        {
+          "@id": "pkg:deb/debian/libpython3.13-stdlib@3.13.5-2%2Bdeb13u5?arch=amd64&distro=debian-13.7&upstream=python3.13"
+        },
+        {
+          "@id": "pkg:deb/debian/python3.13-minimal@3.13.5-2%2Bdeb13u5?arch=amd64&distro=debian-13.7&upstream=python3.13"
+        },
+        {
+          "@id": "pkg:deb/debian/python3.13-venv@3.13.5-2%2Bdeb13u5?arch=amd64&distro=debian-13.7&upstream=python3.13"
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "La faille exige un serveur TLS Python utilisant sni_callback. gunicorn est lance sans --certfile ni --keyfile (CMD du Dockerfile) : aucun ssl.SSLContext serveur n'est cree, l'API sert du HTTP en clair derriere le reseau Docker."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-82049"
+      },
+      "products": [
+        {
+          "@id": "pkg:deb/debian/libpython3.13-minimal@3.13.5-2%2Bdeb13u5?arch=amd64&distro=debian-13.7&upstream=python3.13"
+        },
+        {
+          "@id": "pkg:deb/debian/libpython3.13-stdlib@3.13.5-2%2Bdeb13u5?arch=amd64&distro=debian-13.7&upstream=python3.13"
+        },
+        {
+          "@id": "pkg:deb/debian/python3.13-minimal@3.13.5-2%2Bdeb13u5?arch=amd64&distro=debian-13.7&upstream=python3.13"
+        },
+        {
+          "@id": "pkg:deb/debian/python3.13-venv@3.13.5-2%2Bdeb13u5?arch=amd64&distro=debian-13.7&upstream=python3.13"
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "La faille concerne l'extraction d'archives par le module tarfile. Ni app.py ni ses dependances (Flask, Werkzeug, Jinja2, gunicorn, psycopg2) n'importent tarfile : aucune archive n'est extraite."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-15308"
+      },
+      "products": [
+        {
+          "@id": "pkg:deb/debian/libpython3.13-minimal@3.13.5-2%2Bdeb13u5?arch=amd64&distro=debian-13.7&upstream=python3.13"
+        },
+        {
+          "@id": "pkg:deb/debian/libpython3.13-stdlib@3.13.5-2%2Bdeb13u5?arch=amd64&distro=debian-13.7&upstream=python3.13"
+        },
+        {
+          "@id": "pkg:deb/debian/python3.13-minimal@3.13.5-2%2Bdeb13u5?arch=amd64&distro=debian-13.7&upstream=python3.13"
+        },
+        {
+          "@id": "pkg:deb/debian/python3.13-venv@3.13.5-2%2Bdeb13u5?arch=amd64&distro=debian-13.7&upstream=python3.13"
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "La faille concerne html.parser.HTMLParser. Le module n'est importe ni par app.py ni par ses dependances : l'API ne renvoie que du JSON et n'analyse aucun HTML."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-7210"
+      },
+      "products": [
+        {
+          "@id": "pkg:deb/debian/libpython3.13-minimal@3.13.5-2%2Bdeb13u5?arch=amd64&distro=debian-13.7&upstream=python3.13"
+        },
+        {
+          "@id": "pkg:deb/debian/libpython3.13-stdlib@3.13.5-2%2Bdeb13u5?arch=amd64&distro=debian-13.7&upstream=python3.13"
+        },
+        {
+          "@id": "pkg:deb/debian/python3.13-minimal@3.13.5-2%2Bdeb13u5?arch=amd64&distro=debian-13.7&upstream=python3.13"
+        },
+        {
+          "@id": "pkg:deb/debian/python3.13-venv@3.13.5-2%2Bdeb13u5?arch=amd64&distro=debian-13.7&upstream=python3.13"
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "La faille concerne xml.parsers.expat et xml.etree.ElementTree. Aucun analyseur XML n'est importe par app.py ni ses dependances : l'API n'accepte ni ne traite de XML."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-113351"
+      },
+      "products": [
+        {
+          "@id": "pkg:deb/debian/libexpat1@2.9.0-1~deb13u1?arch=amd64&distro=debian-13.7&upstream=expat"
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "libexpat n'est utilisee que via le module pyexpat de Python, jamais charge par l'API : aucun document XML n'est analyse."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-115506"
+      },
+      "products": [
+        {
+          "@id": "pkg:deb/debian/libexpat1@2.9.0-1~deb13u1?arch=amd64&distro=debian-13.7&upstream=expat"
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "libexpat n'est utilisee que via le module pyexpat de Python, jamais charge par l'API : aucun document XML n'est analyse."
+    }
+  ]
+}
