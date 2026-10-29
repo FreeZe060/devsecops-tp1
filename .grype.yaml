@@ -1,0 +1,3 @@
+fail-on-severity: high
+only-fixed: true
+output: table

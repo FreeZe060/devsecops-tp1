@@ -17,8 +17,9 @@ hôte :5000 ──► api-python (distroless, UID 65532, gunicorn) ──► db 
 | `.dockerignore` | Liste blanche : tout est exclu sauf `app.py` et `requirements.txt` |
 | `.hadolint.yaml` | Seuil `warning`, registres `docker.io`/`gcr.io`/`cgr.dev`/`ghcr.io`, DL3002/DL3006/DL3007/DL4006 en `error` |
 | `sbom.cdx.json` / `sbom.spdx.json` | SBOM CycloneDX et SPDX de `0.6.0` générés par Syft (aussi en artefact CI) |
+| `.grype.yaml` / `security.vex.json` | Règle Grype (HIGH corrigible bloquant) et déclarations OpenVEX d'inexploitabilité |
 | `docker-bake.hcl` | Build déclaratif : variables `REGISTRY`/`IMAGE`/`VERSION`, `linux/amd64` + `linux/arm64`, secret `pip_token`, cache `registry` `mode=max` |
-| `.github/workflows/ci.yaml` | flake8 → hadolint → build multi-arch (Bake + QEMU) + Dive → SBOM Syft / Trivy par plateforme / intégration → release GHCR |
+| `.github/workflows/ci.yaml` | flake8 → hadolint → build multi-arch (Bake + QEMU) + Dive → SBOM Syft + Grype/VEX / Trivy par plateforme / intégration → release GHCR |
 
 ## 1. Liens publics des packages GHCR
 
@@ -135,6 +136,8 @@ Déclenchement sur `push` et `pull_request` vers `main`, et sur les tags `v*.*.*
 | `flake8` | violation non ignorée par `.flake8` |
 | `hadolint` | avertissement avec `.hadolint.yaml` |
 | `build` | QEMU (`setup-qemu-action`, binfmt épinglé) → builder `docker-container` → `bake-action` : index multi-arch poussé **par digest** (sans tag) + cache `buildcache` ; Dive `--ci --lowestEfficiency=0.8` < 80 % |
+| `sbom` | Syft sur le digest (amd64) : CycloneDX + SPDX, requêtes `jq`, artefact `sbom` (90 jours) |
+| `grype` | Grype sur l'artefact `sbom` avec `.grype.yaml` et `--vex security.vex.json` : HIGH/CRITICAL corrigible non qualifiée |
 | `trivy` | matrice `linux/amd64` / `linux/arm64` sur le digest : HIGH/CRITICAL corrigible (`--ignore-unfixed --exit-code 1`), `--scanners secret` ; `fs` sur les sources |
 | `integration` | image tirée par digest ; `compose up --wait --wait-timeout 120`, `/health`, `/dbtest`, pytest ; `down -v` en `if: always()` |
 | `release` | uniquement sur tag `v*.*.*` et après succès de `trivy` et `integration` ; `docker buildx imagetools create` pose les tags SemVer sur le digest audité, sans reconstruction, puis `imagetools inspect` |
@@ -209,7 +212,41 @@ métadonnées. Les licences GPL/LGPL proviennent des paquets Debian du runtime (
 liés dynamiquement. Métadonnées CISA présentes : outil `syft 1.55.0`, horodatage, PURL et CPE sur les 47 paquets,
 empreintes SHA-256 des 2142 fichiers, graphe `dependencies`.
 
-## 9. Preuves d'exécution
+## 9. Corrélation Grype et qualification VEX
+
+Grype corrèle le **SBOM** (pas l'image) avec sa base de vulnérabilités. [`.grype.yaml`](.grype.yaml) fixe
+la règle commune au poste et à la CI : `fail-on-severity: high`, `only-fixed: true`. Le job `grype`
+télécharge l'artefact `sbom` puis lance :
+
+```bash
+docker run --rm -v "$PWD:/data:ro" -w /data anchore/grype:v0.121.0@sha256:621d56d1… \
+  sbom:/data/sbom.cdx.json --vex /data/security.vex.json
+```
+
+| Contrôle | Résultat |
+|---|---|
+| Vulnérabilités HIGH/CRITICAL **corrigibles** | **0** → exit 0 |
+| Test négatif (SBOM avec Werkzeug 2.3.3) | `discovered vulnerabilities at or above the severity threshold` → exit 2 |
+| Scan complet sans VEX | 174 correspondances, dont 45 HIGH/CRITICAL (toutes sans correctif Debian) |
+| Scan complet avec [`security.vex.json`](security.vex.json) | 150 correspondances, 21 HIGH/CRITICAL : **24 neutralisées** (`namespace: vex`) |
+
+Déclarations OpenVEX (`status: not_affected`), chaque produit étant le PURL exact du SBOM :
+
+| CVE | Paquets | Justification | Raison technique et métier |
+|---|---|---|---|
+| CVE-2025-69720 | libncursesw6, libtinfo6 | `vulnerable_code_not_present` | Faille dans l'outil `infocmp` ; l'image distroless ne contient que les bibliothèques, ni `infocmp` ni shell |
+| CVE-2026-76642, 78408, 78409, 78410 | libuuid1 | `vulnerable_code_not_present` | Failles dans `mount` / `nsenter` d'util-linux ; seule `libuuid.so.1` est présente |
+| CVE-2026-19445 (Critical) | python3.13 | `vulnerable_code_not_in_execute_path` | Exige un serveur TLS Python avec `sni_callback` ; gunicorn est lancé sans `--certfile` : l'API sert du HTTP sur le réseau Docker |
+| CVE-2026-82049 | python3.13 | `vulnerable_code_not_in_execute_path` | `tarfile` n'est importé ni par `app.py` ni par les dépendances : aucune archive extraite |
+| CVE-2026-15308 | python3.13 | `vulnerable_code_not_in_execute_path` | `html.parser` jamais importé : l'API ne produit que du JSON |
+| CVE-2026-7210, 113351, 115506 | python3.13, libexpat1 | `vulnerable_code_not_in_execute_path` | Aucun analyseur XML (`xml.*`, `pyexpat`) importé : l'API n'accepte pas de XML |
+
+Vérifications faites sur l'image `0.6.0` extraite : aucun binaire `mount`, `nsenter`, `infocmp` ni shell ;
+`grep` des imports dans `app.py` et `/app/deps`. Les CVE non qualifiées (libstdc++, krb5, glibc, zlib)
+restent visibles : leur inexploitabilité n'a pas pu être démontrée. Les PURL portent la version Debian :
+toute mise à jour de l'image impose de revoir le document.
+
+## 10. Preuves d'exécution
 
 ```
 $ python -m flake8 .                                    → exit code 0

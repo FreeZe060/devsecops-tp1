@@ -23,6 +23,7 @@ env:
   HADOLINT_IMAGE: hadolint/hadolint:v2.15.1@sha256:32dac94127fd60b7b7e3fbfc65e1383b9b5e25c9bfd7b8536de7a539fe68a12d
   DIVE_IMAGE: wagoodman/dive:v0.13.1@sha256:f1886e6c32c094fc41a623c1989f5cb3e48aa766da5f0be233f911fc1d85ce10
   SYFT_IMAGE: anchore/syft:v1.55.0@sha256:4cc92b64ca74ffca4c94d4c8fcc01f217731375300be14d0b6eeb2e82eaa110a
+  GRYPE_IMAGE: anchore/grype:v0.121.0@sha256:621d56d1d68106b787022c81546f7e0a36202a25d1239f0c20195fab8c16f7ea
   TRIVY_IMAGE: aquasec/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa
 
 defaults:
@@ -154,6 +155,30 @@ jobs:
           retention-days: 90
           if-no-files-found: error
 
+  grype:
+    needs:
+      - sbom
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: sbom
+          path: ${{ runner.temp }}/sbom
+      - name: grype sur le sbom avec vex
+        run: >-
+          docker run --rm
+          -v "${GITHUB_WORKSPACE}:/data:ro"
+          -v "${RUNNER_TEMP}/sbom:/sbom:ro"
+          -w /data
+          "${GRYPE_IMAGE}" sbom:/sbom/sbom.cdx.json
+          --vex /data/security.vex.json
+
   trivy:
     needs:
       - build
@@ -257,6 +282,7 @@ jobs:
     needs:
       - build
       - sbom
+      - grype
       - trivy
       - integration
     runs-on: ubuntu-24.04
