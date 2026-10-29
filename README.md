@@ -26,9 +26,9 @@ Package : **https://github.com/FreeZe060/devsecops-tp1/pkgs/container/devsecops-
 ![Package GHCR public](docs/captures/ghcr-package.png)
 
 ```bash
-docker pull ghcr.io/freeze060/devsecops-tp1:0.5.0
-docker pull ghcr.io/freeze060/devsecops-tp1:0.5
-docker run -d --name tp1 -p 5000:5000 ghcr.io/freeze060/devsecops-tp1:0.5.0
+docker pull ghcr.io/freeze060/devsecops-tp1:0.6.0
+docker pull ghcr.io/freeze060/devsecops-tp1:0.6
+docker run -d --name tp1 -p 5000:5000 ghcr.io/freeze060/devsecops-tp1:0.6.0
 curl http://localhost:5000/health
 ```
 
@@ -158,6 +158,26 @@ L'index OCI expose `linux/amd64` et `linux/arm64` (plus une attestation `unknown
 `docker pull` choisit la variante du processeur. Le stage builder arm64 s'exécute sous QEMU ;
 `psycopg2-binary` fournit une roue `manylinux aarch64`, rien n'est compilé. Sur un builder vide,
 le cache `registry` `mode=max` restaure toutes les couches, y compris `pip install`.
+
+Manifeste distant publié par le tag `v0.6.0` (pipeline https://github.com/FreeZe060/devsecops-tp1/actions/runs/40877182870) :
+
+```
+$ docker buildx imagetools inspect ghcr.io/freeze060/devsecops-tp1:0.6.0
+Name:      ghcr.io/freeze060/devsecops-tp1:0.6.0
+MediaType: application/vnd.oci.image.index.v1+json
+Digest:    sha256:9ef18c0460019d4ab862bf5a34142671d22e41b007fcd3a4054916fb870ee2fc
+Manifests:
+  Platform:    linux/amd64     sha256:abde8df9cc9b6c4d8835d6019cb1b8e4b7ad65ad5cc9728ffbf4625d3e426708
+  Platform:    linux/arm64     sha256:bb37979d2010b54d656ecf95add01d9913bf433c2cf17c4e64ff2e68a4614cf5
+  Platform:    unknown/unknown (attestation-manifest)
+
+$ docker run --rm --platform linux/amd64 --entrypoint python3 ghcr.io/freeze060/devsecops-tp1:0.6.0 -c 'import platform;print(platform.machine())'
+x86_64
+$ docker run --rm --platform linux/arm64 --entrypoint python3 ghcr.io/freeze060/devsecops-tp1:0.6.0 -c 'import platform;print(platform.machine())'
+aarch64
+```
+
+Les tags `0.6.0` et `0.6` pointent sur le même index `sha256:9ef18c04…`, celui construit et audité par le pipeline.
 
 ## 8. Preuves d'exécution
 
