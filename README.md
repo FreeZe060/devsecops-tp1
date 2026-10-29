@@ -16,7 +16,7 @@ hôte :5000 ──► api-python (distroless, UID 65532, gunicorn) ──► db 
 | `requirements.txt` | Flask 3.1.3, Werkzeug 3.1.9, psycopg2-binary 2.9.13, gunicorn 26.2.0 — 0 CVE |
 | `.dockerignore` | Liste blanche : tout est exclu sauf `app.py` et `requirements.txt` |
 | `.hadolint.yaml` | Seuil `warning`, registres `docker.io`/`gcr.io`/`cgr.dev`/`ghcr.io`, DL3002/DL3006/DL3007/DL4006 en `error` |
-| `sbom.cdx.json` / `sbom.spdx.json` | SBOM CycloneDX et SPDX de `0.6.0` générés par Syft (aussi en artefact CI) |
+| `sbom.cdx.json` / `sbom.spdx.json` | SBOM CycloneDX (certifié, extrait de l'attestation) et SPDX de `0.7.0`, générés par Syft (aussi en artefact CI) |
 | Vérification OIDC (pas de `cosign.pub`) | Signature keyless : identité du workflow et émetteur documentés en §10 |
 | `.grype.yaml` / `security.vex.json` | Règle Grype (HIGH corrigible bloquant) et déclarations OpenVEX d'inexploitabilité |
 | `docker-bake.hcl` | Build déclaratif : variables `REGISTRY`/`IMAGE`/`VERSION`, `linux/amd64` + `linux/arm64`, secret `pip_token`, cache `registry` `mode=max` |
@@ -29,9 +29,9 @@ Package : **https://github.com/FreeZe060/devsecops-tp1/pkgs/container/devsecops-
 ![Package GHCR public](docs/captures/ghcr-package.png)
 
 ```bash
-docker pull ghcr.io/freeze060/devsecops-tp1:0.6.0
-docker pull ghcr.io/freeze060/devsecops-tp1:0.6
-docker run -d --name tp1 -p 5000:5000 ghcr.io/freeze060/devsecops-tp1:0.6.0
+docker pull ghcr.io/freeze060/devsecops-tp1:0.7.0
+docker pull ghcr.io/freeze060/devsecops-tp1:0.7
+docker run -d --name tp1 -p 5000:5000 ghcr.io/freeze060/devsecops-tp1:0.7.0
 curl http://localhost:5000/health
 ```
 
@@ -164,8 +164,8 @@ Déclenchement sur `push` et `pull_request` vers `main`, et sur les tags `v*.*.*
 
 ```bash
 docker buildx create --name tp2 --driver docker-container --bootstrap --use
-VERSION=0.6.0 docker buildx bake --push
-docker buildx imagetools inspect ghcr.io/freeze060/devsecops-tp1:0.6.0
+VERSION=0.7.0 docker buildx bake --push
+docker buildx imagetools inspect ghcr.io/freeze060/devsecops-tp1:0.7.0
 ```
 
 L'index OCI expose `linux/amd64` et `linux/arm64` (plus une attestation `unknown/unknown`) :
@@ -173,36 +173,37 @@ L'index OCI expose `linux/amd64` et `linux/arm64` (plus une attestation `unknown
 `psycopg2-binary` fournit une roue `manylinux aarch64`, rien n'est compilé. Sur un builder vide,
 le cache `registry` `mode=max` restaure toutes les couches, y compris `pip install`.
 
-Manifeste distant publié par le tag `v0.6.0` (pipeline https://github.com/FreeZe060/devsecops-tp1/actions/runs/40877182870) :
+Manifeste distant publié par le tag `v0.7.0` (pipeline https://github.com/FreeZe060/devsecops-tp1/actions/runs/40891011003) :
 
 ```
-$ docker buildx imagetools inspect ghcr.io/freeze060/devsecops-tp1:0.6.0
-Name:      ghcr.io/freeze060/devsecops-tp1:0.6.0
+$ docker buildx imagetools inspect ghcr.io/freeze060/devsecops-tp1:0.7.0
+Name:      ghcr.io/freeze060/devsecops-tp1:0.7.0
 MediaType: application/vnd.oci.image.index.v1+json
-Digest:    sha256:9ef18c0460019d4ab862bf5a34142671d22e41b007fcd3a4054916fb870ee2fc
+Digest:    sha256:ee953f5beb1e25e31fad3fae531a668c5de09326705c4e6c358514554e809b91
 Manifests:
   Platform:    linux/amd64     sha256:abde8df9cc9b6c4d8835d6019cb1b8e4b7ad65ad5cc9728ffbf4625d3e426708
   Platform:    linux/arm64     sha256:bb37979d2010b54d656ecf95add01d9913bf433c2cf17c4e64ff2e68a4614cf5
-  Platform:    unknown/unknown (attestation-manifest)
+  Platform:    unknown/unknown (attestations de provenance BuildKit, une par plateforme)
 
-$ docker run --rm --platform linux/amd64 --entrypoint python3 ghcr.io/freeze060/devsecops-tp1:0.6.0 -c 'import platform;print(platform.machine())'
+$ docker run --rm --platform linux/amd64 --entrypoint python3 ghcr.io/freeze060/devsecops-tp1:0.7.0 -c 'import platform;print(platform.machine())'
 x86_64
-$ docker run --rm --platform linux/arm64 --entrypoint python3 ghcr.io/freeze060/devsecops-tp1:0.6.0 -c 'import platform;print(platform.machine())'
+$ docker run --rm --platform linux/arm64 --entrypoint python3 ghcr.io/freeze060/devsecops-tp1:0.7.0 -c 'import platform;print(platform.machine())'
 aarch64
 ```
 
-Les tags `0.6.0` et `0.6` pointent sur le même index `sha256:9ef18c04…`, celui construit et audité par le pipeline.
+Les tags `0.7.0` et `0.7` pointent sur le même index `sha256:ee953f5b…`, celui construit et audité par le pipeline.
+Les manifestes amd64 et arm64 sont identiques à ceux de `0.6.0` : Dockerfile inchangé, couches restituées par le cache.
 
 ## 8. SBOM et analyse de traçabilité
 
 Syft lit les couches de l'image publiée **par digest**, sans `docker run`, et produit les deux standards
 en une passe : CycloneDX (OWASP) et SPDX 2.3 (ISO/IEC 5962). Les fichiers [`sbom.cdx.json`](sbom.cdx.json)
-et [`sbom.spdx.json`](sbom.spdx.json) à la racine correspondent à `0.6.0` (`linux/amd64`, variante testée
-en intégration) ; le job `sbom` les régénère à chaque pipeline et les archive en artefact (90 jours).
+et [`sbom.spdx.json`](sbom.spdx.json) à la racine correspondent à `0.7.0` (`linux/amd64`, variante testée
+en intégration) ; `sbom.cdx.json` est le SBOM certifié extrait de l'attestation Cosign (§10) ; le job `sbom` les régénère à chaque pipeline et les archive en artefact (90 jours).
 
 ```bash
 docker run --rm -v "$PWD:/out" anchore/syft:v1.55.0@sha256:4cc92b64… \
-  registry:ghcr.io/freeze060/devsecops-tp1@sha256:9ef18c04… --platform linux/amd64 \
+  registry:ghcr.io/freeze060/devsecops-tp1@sha256:ee953f5b… --platform linux/amd64 \
   -o cyclonedx-json=/out/sbom.cdx.json -o spdx-json=/out/sbom.spdx.json
 ```
 
@@ -251,7 +252,7 @@ Déclarations OpenVEX (`status: not_affected`), chaque produit étant le PURL ex
 | CVE-2026-15308 | python3.13 | `vulnerable_code_not_in_execute_path` | `html.parser` jamais importé : l'API ne produit que du JSON |
 | CVE-2026-7210, 113351, 115506 | python3.13, libexpat1 | `vulnerable_code_not_in_execute_path` | Aucun analyseur XML (`xml.*`, `pyexpat`) importé : l'API n'accepte pas de XML |
 
-Vérifications faites sur l'image `0.6.0` extraite : aucun binaire `mount`, `nsenter`, `infocmp` ni shell ;
+Vérifications faites sur l'image extraite (paquets identiques en `0.6.0` et `0.7.0`) : aucun binaire `mount`, `nsenter`, `infocmp` ni shell ;
 `grep` des imports dans `app.py` et `/app/deps`. Les CVE non qualifiées (libstdc++, krb5, glibc, zlib)
 restent visibles : leur inexploitabilité n'a pas pu être démontrée. Les PURL portent la version Debian :
 toute mise à jour de l'image impose de revoir le document.
@@ -287,6 +288,29 @@ jq '.components | length' verified-sbom.json
 
 Une image modifiée d'un octet, signée par un autre dépôt ou depuis un autre workflow renvoie
 `no matching signatures` et un code de sortie non nul.
+
+Résultat depuis un poste non authentifié, après le pipeline du tag `v0.7.0`
+(https://github.com/FreeZe060/devsecops-tp1/actions/runs/40891011003, jobs `release` et `verify` en succès) :
+
+```
+DIGEST=sha256:ee953f5beb1e25e31fad3fae531a668c5de09326705c4e6c358514554e809b91
+
+$ cosign verify …                                   → exit 0
+  - The cosign claims were validated
+  - Existence of the claims in the transparency log was verified offline
+  - The code-signing certificate was verified using trusted certificate authority certificates
+  éléments signés : https://sigstore.dev/cosign/sign/v1 (signature) et https://cyclonedx.org/bom (attestation)
+
+$ cosign verify-attestation --type cyclonedx …      → exit 0
+  predicateType : https://cyclonedx.org/bom
+  subject       : ghcr.io/freeze060/devsecops-tp1@sha256:ee953f5b…
+
+$ jq '.components | length' verified-sbom.json      → 2190   (47 PURL, syft 1.55.0)
+
+$ cosign verify --certificate-identity "…/ci.yaml@refs/heads/main" …   → exit 1
+  no matching CertificateIdentity found … got "…/ci.yaml@refs/tags/v0.7.0"
+$ cosign verify … ghcr.io/freeze060/devsecops-tp1@sha256:9ef18c04… (0.6.0, non signée) → no signatures found, exit 10
+```
 
 ## 11. Preuves d'exécution
 
