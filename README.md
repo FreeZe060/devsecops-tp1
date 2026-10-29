@@ -168,7 +168,9 @@ et [`sbom.spdx.json`](sbom.spdx.json) à la racine correspondent à `0.6.0` (`li
 en intégration) ; le job `sbom` les régénère à chaque pipeline et les archive en artefact (90 jours).
 
 ```bash
-docker run --rm -v "$PWD:/out" anchore/syft:v1.55.0@sha256:4cc92b64… \n  registry:ghcr.io/freeze060/devsecops-tp1@sha256:9ef18c04… --platform linux/amd64 \n  -o cyclonedx-json=/out/sbom.cdx.json -o spdx-json=/out/sbom.spdx.json
+docker run --rm -v "$PWD:/out" anchore/syft:v1.55.0@sha256:4cc92b64… \
+  registry:ghcr.io/freeze060/devsecops-tp1@sha256:9ef18c04… --platform linux/amd64 \
+  -o cyclonedx-json=/out/sbom.cdx.json -o spdx-json=/out/sbom.spdx.json
 ```
 
 | Requête `jq` | Résultat |
