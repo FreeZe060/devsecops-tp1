@@ -1,6 +1,17 @@
-# DevSecOps TP1 — Hardening Flask / PostgreSQL
+# DevSecOps TP1 et TP2 — Flask / PostgreSQL : hardening, build industriel et supply chain
 
 Binôme : **Tim Vannson** ([@FreeZe060](https://github.com/FreeZe060)) · **Alexandre Perez** ([@Hallexxx](https://github.com/Hallexxx))
+
+## Sommaire du TP 2
+
+| Attendu du sujet | Section |
+|---|---|
+| Preuves d'industrialisation BuildKit : temps de build, absence du secret, manifeste multi-arch (étape 1) | [§7](#7-preuves-dindustrialisation-buildkit-étape-1) |
+| SBOM et requêtes JSON (étape 2.D) | [§8](#8-sbom-et-analyse-de-traçabilité) |
+| Grype et justification du VEX (étape 2.E) | [§9](#9-corrélation-grype-et-qualification-vex) |
+| Signature, attestation et commandes pour l'évaluateur (étape 2.F) | [§10](#10-signature-et-vérification-publique-cosign-keyless) |
+| Chaîne CI/CD complète | [§6](#6-sécurisation-de-la-chaîne-cicd) |
+| Répartition du travail | [§11](#11-répartition-du-travail-tp-2) |
 
 ## Architecture et livrables
 
@@ -76,20 +87,7 @@ change), `pip install --no-compile --target /install` avec un cache BuildKit
 `--mount=type=cache,target=/root/.cache/pip,sharing=locked` (frontend `docker/dockerfile:1.27.1` épinglé
 par digest) : une dépendance modifiée ne retélécharge qu'elle-même et le cache n'entre jamais dans une
 couche. Seuls `/install` et `app.py` sont copiés via `COPY --from=builder`. Aucun `ADD`, aucun `cd`,
-`SHELL` avec `-o pipefail`.
-
-| Build (`docker buildx build --progress=plain`) | Durée totale | `pip install` | Téléchargements |
-|---|---|---|---|
-| À froid (cache BuildKit purgé) | 9 s | 3,4 s | 9 paquets `Downloading` |
-| Après `gunicorn` 26.2.0 → 26.1.0 | **4 s** | **1,8 s** | gunicorn seul ; 8 paquets `Using cached` |
-
-Image finale inchangée (111 Mo amd64), aucun `.cache/pip` dans `docker export`, Dive 99,78 %.
-
-**Secret de build** : `--mount=type=secret,id=pip_token,required=true` projette le jeton en tmpfs le
-temps du seul `RUN` d'installation, `test -s` le vérifie ; jamais d'`ARG`, d'`ENV` ni de copie sur disque.
-Le fichier source est exclu de Git (`.gitignore`) et du contexte (`.dockerignore` en liste blanche).
-Build sans secret ou avec un secret vide → échec. `docker history --no-trunc`, `docker save` et
-`trivy image --scanners secret` : 0 trace du jeton, y compris dans les couches du stage `builder`.
+`SHELL` avec `-o pipefail`. Le secret de build et les mesures sont détaillés en §7.
 
 ## 4. Résolution des contraintes sans shell
 
@@ -160,7 +158,50 @@ Déclenchement sur `push` et `pull_request` vers `main`, et sur les tags `v*.*.*
 - **SemVer** : tag Git `vX.Y.Z` → tags d'image `X.Y.Z`, `X.Y` et `X` via `docker/metadata-action`
   (`X` non publié pour les versions `0.x`), `latest` désactivé.
 
-## 7. Build multi-architecture
+## 7. Preuves d'industrialisation BuildKit (étape 1)
+
+### Cache persistant
+
+| Build local (`docker buildx build --progress=plain`) | Durée totale | `pip install` | Téléchargements |
+|---|---|---|---|
+| À froid (cache BuildKit purgé) | 9 s | 3,4 s | 9 paquets `Downloading` |
+| Après `gunicorn` 26.2.0 → 26.1.0 | **4 s** | **1,8 s** | gunicorn seul ; 8 paquets `Using cached` |
+
+Image finale inchangée (111 Mo amd64), aucun `.cache/pip` dans `docker export`, Dive 99,78 %.
+
+**Limite en CI** : le contenu de `--mount=type=cache` reste dans le builder et n'est pas exporté par `cache-to`.
+Sur un runner éphémère, ce dossier repart vide : l'accélération vient alors du cache de couches `registry`
+en `mode=max`, qui évite `pip install` tant que `requirements.txt` ne change pas. Le gain ci-dessus suppose
+un builder persistant (poste local, runner auto-hébergé).
+
+### Secret de build
+
+`--mount=type=secret,id=pip_token,required=true` projette le jeton en tmpfs le temps du seul `RUN`
+d'installation, et `test -s` vérifie qu'il n'est pas vide. Aucun `ARG`, `ENV` ni copie sur disque.
+
+```
+$ git check-ignore -v secrets/pip_token.txt
+.gitignore:12:secrets/  secrets/pip_token.txt
+$ docker buildx build --no-cache -t test .             (sans --secret)
+ERROR: failed to build: failed to solve: secret pip_token: not found
+
+Image 0.7.0 publiée (jeton aléatoire de CI, non conservé) :
+$ docker history --no-trunc <image amd64> | grep -ciE 'pip_token|run/secrets'                  → 0
+$ docker export <conteneur> | tar -t | grep -ciE 'pip_token|run/secrets|\.cache/pip'           → 0
+$ trivy image --image-src remote --platform <amd64|arm64> --scanners secret --exit-code 1 …    → 0 secret, exit 0
+
+Build local avec un jeton connu, recherche de sa valeur :
+$ docker history --no-trunc <image> | grep -c "$TOKEN"     → 0   (image finale et stage builder)
+$ docker save <image> | grep -a -c "$TOKEN"                → 0   (image finale et stage builder)
+$ docker inspect <image> | grep -c "$TOKEN"                → 0   (image finale)
+```
+
+Le contrôle `--scanners secret` s'exécute aussi en CI sur les deux plateformes. Un secret manquant ne fait
+échouer le build que si l'étape s'exécute : si sa couche est en cache, BuildKit ne la rejoue pas et ne demande
+pas le secret (d'où `--no-cache` ci-dessus). La CI fournit toujours le secret. Dans l'historique du stage
+`builder`, seul le texte de la commande apparaît, jamais la valeur.
+
+### Multi-architecture
 
 ```bash
 docker buildx create --name tp2 --driver docker-container --bootstrap --use
@@ -316,33 +357,51 @@ Gate `verify` du pipeline `v0.7.0` (signature, attestation et extraction du SBOM
 
 ![Job verify v0.7.0](docs/captures/ci-verify-v0.7.0.png)
 
-## 11. Preuves d'exécution
+## 11. Répartition du travail (TP 2)
+
+| # | Tâche | Partie | Fichiers | Réalisé par |
+|---|---|---|---|---|
+| T1 | Syntaxe BuildKit et cache pip | 1.A | `Dockerfile` | Alexandre |
+| T2 | Montage et vérification du secret de build | 1.B | `Dockerfile` | Tim et Alexandre |
+| T3 | Secret de build dans Compose et la CI | 1.B | `docker-compose.yml`, `ci.yaml` | Tim |
+| T4 | Configuration déclarative Bake | 1.C | `docker-bake.hcl` | Alexandre |
+| T5 | CI multi-arch : QEMU, Buildx, Bake, circulation du digest | 1.C | `ci.yaml` | Tim |
+| T6 | Remédiation `libexpat1` (digest Distroless) | 1.C | `Dockerfile` | Alexandre |
+| T7 | Job Syft, SBOM et requêtes `jq` | 2.D | `ci.yaml`, `sbom.*.json` | Tim |
+| T8 | Job Grype et règle de blocage | 2.E | `ci.yaml`, `.grype.yaml` | Tim |
+| T9 | Analyse des CVE et rédaction du VEX | 2.E | `security.vex.json` | Alexandre |
+| T10 | Signature et attestation Cosign | 2.F | `ci.yaml` | Alexandre et Tim |
+| T11 | Gate d'admission `verify` | 2.F | `ci.yaml` | Alexandre |
+| T12 | Sections de preuves du README | Toutes | `README.md` | Tim et Alexandre |
+| T13 | Publication `v0.7.0` et vérification publique | Toutes | Tag Git, `README.md` | Tim et Alexandre |
+
+## 12. Preuves d'exécution
+
+Mesures relancées sur l'image `0.7.0` publiée :
 
 ```
 $ python -m flake8 .                                    → exit code 0
 $ hadolint --config .hadolint.yaml Dockerfile           → exit code 0
 
-$ dive --ci --lowestEfficiency=0.8 ghcr.io/freeze060/devsecops-tp1:0.5.0
-  efficiency: 99.7845 %   wastedBytes: 322 kB
-  PASS: lowestEfficiency  Result:PASS
+$ dive --ci --lowestEfficiency=0.8 <image amd64 @sha256:abde8df9…>
+  efficiency: 99.7845 %   wastedBytes: 322 kB   Result:PASS
 
-$ trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 ghcr.io/freeze060/devsecops-tp1:0.5.0
-  debian 13.7 : 0   flask / werkzeug / gunicorn / psycopg2 … : 0   → exit code 0
+$ trivy image --image-src remote --platform <amd64|arm64> --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 ghcr.io/freeze060/devsecops-tp1:0.7.0
+  0 vulnérabilité HIGH/CRITICAL corrigible sur les deux plateformes → exit code 0
 
-$ docker compose ps
+$ docker compose ps                                     (image amd64 de la 0.7.0, tirée par digest)
   api-python   Up (healthy)
   db           Up (healthy)
-$ curl http://localhost:5000/dbtest   → {"db_connection":"successful"}
+$ curl http://localhost:5008/health   → {"status":"ok"}
+$ curl http://localhost:5008/dbtest   → {"db_connection":"successful"}
 
 $ docker compose --profile test run --rm tests
   test_app.py::test_health PASSED
   test_app.py::test_hello PASSED
   test_app.py::test_dbtest PASSED      3 passed
-
-$ docker pull ghcr.io/freeze060/devsecops-tp1:0.5.0   (sans authentification)
-  Digest: sha256:a35004c0c18fe07dbdace1f94592715605e0e4e0686972fbda8e229a4c3811a2
-  tags publiés : 0.5.0, 0.5
 ```
+
+Index `0.7.0` et `0.7` : `sha256:ee953f5beb1e25e31fad3fae531a668c5de09326705c4e6c358514554e809b91`.
 
 Pipeline du tag `v0.7.0`, 11 jobs en succès dont `release` (publication, signature, attestation) et `verify`
 (https://github.com/FreeZe060/devsecops-tp1/actions/runs/40891011003) :
